@@ -15,7 +15,8 @@ class RetinaNetFeatureExtractor(object):
                  is_training,
                  batch_norm_trainable=False,
                  reuse_weights=None,
-                 weight_decay=0.0):
+                 weight_decay=0.0,
+                 feature_depth=256):
         """Constructor.
         Args:
           is_training: A boolean indicating whether the training version of the
@@ -25,36 +26,31 @@ class RetinaNetFeatureExtractor(object):
             (e.g. 8), it could be desirable to enable batch norm update.
           reuse_weights: Whether to reuse variables. Default is None.
           weight_decay: float weight decay for feature extractor (default: 0.0).
+          feature_depth: Feature depth
         """
         self._is_training = is_training
         self._train_batch_norm = (batch_norm_trainable and is_training)
         self._reuse_weights = reuse_weights
         self._weight_decay = weight_decay
+        self._feature_depth = feature_depth
 
     @abstractmethod
     def preprocess(self, resized_inputs):
         """Feature-extractor specific preprocessing (minus image resizing)."""
         pass
 
-    def extract_proposal_features(self, preprocessed_inputs, scope):
-        """Extracts RPN features.
-        This function is responsible for extracting feature maps from preprocessed
-        images.  These features are used by the region proposal network (RPN) to
-        predict proposals.
-        Args:
-          preprocessed_inputs: A [batch, height, width, channels] float tensor
-            representing a batch of images.
-          scope: A scope name.
-        Returns:
-          rpn_feature_map: A dictionary with pyramid layers as keys and
-          tensors with shape [batch, height, width, depth] as values
-        """
-        with tf.variable_scope(scope, values=[preprocessed_inputs]):
-            return self._extract_proposal_features(preprocessed_inputs, scope)
-
     @abstractmethod
-    def _extract_proposal_features(self, preprocessed_inputs, scope):
-        """Extracts RPN features, to be overridden."""
+    def extract_features(self, preprocessed_inputs):
+        """Extracts features from preprocessed inputs.
+        This function is responsible for extracting feature maps from preprocessed
+        images (to be overridden).
+        Args:
+          preprocessed_inputs: a [batch, height, width, channels] float tensor
+            representing a batch of images.
+        Returns:
+          feature_maps: a list of tensors where the ith tensor has shape
+            [batch, height_i, width_i, depth_i]
+        """
         pass
 
     @abstractmethod
@@ -111,7 +107,6 @@ class RetinaNetMetaArch(model.DetectionModel):
         self._image_resizer_fn = image_resizer_fn
         # Needed for fine-tuning from classification checkpoints whose
         # variables do not have the feature extractor scope.
-        self._fextract_features_scope = 'FeatureExtractor'
         self._feature_extractor = feature_extractor
         self._parallel_iterations = parallel_iterations
         self._anchor_generator = anchor_generator
@@ -172,7 +167,7 @@ class RetinaNetMetaArch(model.DetectionModel):
           image_shape: A 1-D tensor representing the input image shape.
         """
         image_shape = tf.shape(preprocessed_inputs)
-        rpn_features = self._feature_extractor.extract_proposal_features(
+        rpn_features = self._feature_extractor.extract_features(
             preprocessed_inputs, scope=self.feature_extractor_scope)
         feature_map_shape_list = []
 

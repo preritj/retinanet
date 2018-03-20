@@ -17,6 +17,7 @@ Code ref:
 import tensorflow as tf
 from slim.nets.nasnet import nasnet
 from slim.nets.nasnet import nasnet_utils
+from object_detection.models import feature_map_generators
 import retinanet_meta_arch
 
 arg_scope = tf.contrib.framework.arg_scope
@@ -65,8 +66,8 @@ def _build_nasnet_base(hidden_previous,
     # Run the cells
     for cell_num in range(start_cell_num, hparams.num_cells):
         stride = 1
-        if hparams.skip_reduction_layer_input:
-            prev_layer = cell_outputs[-2]
+        # if hparams.skip_reduction_layer_input:
+        #    prev_layer = cell_outputs[-2]
         if cell_num in reduction_indices:
             filter_scaling *= hparams.filter_scaling_rate
             net = reduction_cell(
@@ -78,14 +79,14 @@ def _build_nasnet_base(hidden_previous,
                 cell_num=true_cell_num)
             true_cell_num += 1
             cell_outputs.append(net)
-        if not hparams.skip_reduction_layer_input:
-            prev_layer = cell_outputs[-2]
+        # if not hparams.skip_reduction_layer_input:
+        #    prev_layer = cell_outputs[-2]
         net = normal_cell(
             net,
             scope='cell_{}'.format(cell_num),
             filter_scaling=filter_scaling,
             stride=stride,
-            prev_layer=prev_layer,
+            prev_layer=cell_outputs[-2],
             cell_num=true_cell_num)
         true_cell_num += 1
         cell_outputs.append(net)
@@ -94,19 +95,19 @@ def _build_nasnet_base(hidden_previous,
 
 def build_custom_nasnet(images, is_training=True):
     """Build custom NASNet Mobile model"""
-    hparams = nasnet._mobile_imagenet_config()
-    # Calculate the total number of cells in the network
-    # -- Add 2 for the reduction cells.
-    total_num_cells = hparams.num_cells + 2
-    # -- And add 2 for the stem cells for ImageNet training.
-    total_num_cells += 2
-
-    normal_cell = nasnet_utils.NasNetANormalCell(
-        hparams.num_conv_filters, hparams.drop_path_keep_prob,
-        total_num_cells, hparams.total_training_steps)
-    reduction_cell = nasnet_utils.NasNetAReductionCell(
-        hparams.num_conv_filters, hparams.drop_path_keep_prob,
-        total_num_cells, hparams.total_training_steps)
+    # hparams = nasnet._mobile_imagenet_config()
+    # # Calculate the total number of cells in the network
+    # # -- Add 2 for the reduction cells.
+    # total_num_cells = hparams.num_cells + 2
+    # # -- And add 2 for the stem cells for ImageNet training.
+    # total_num_cells += 2
+    #
+    # normal_cell = nasnet_utils.NasNetANormalCell(
+    #     hparams.num_conv_filters, hparams.drop_path_keep_prob,
+    #     total_num_cells, hparams.total_training_steps)
+    # reduction_cell = nasnet_utils.NasNetAReductionCell(
+    #     hparams.num_conv_filters, hparams.drop_path_keep_prob,
+    #     total_num_cells, hparams.total_training_steps)
 
     net, end_points = nasnet.build_nasnet_mobile(
         images, num_classes=None,
@@ -134,16 +135,19 @@ class RetinaNetNASFeatureExtractor(retinanet_meta_arch.RetinaNetFeatureExtractor
                  is_training,
                  batch_norm_trainable=False,
                  reuse_weights=None,
-                 weight_decay=0.0):
+                 weight_decay=0.0,
+                 feature_depth=256):
         """Constructor.
         Args:
           is_training: See base class.
           batch_norm_trainable: See base class.
           reuse_weights: See base class.
           weight_decay: See base class.
+          feature_depth: See base class.
         """
         super(RetinaNetNASFeatureExtractor, self).__init__(
-            is_training, batch_norm_trainable, reuse_weights, weight_decay)
+            is_training, batch_norm_trainable, reuse_weights,
+            weight_decay, feature_depth)
 
     def preprocess(self, resized_inputs):
         """RetinaNet with NAS preprocessing.
@@ -157,24 +161,17 @@ class RetinaNetNASFeatureExtractor(retinanet_meta_arch.RetinaNetFeatureExtractor
         """
         return (2.0 / 255.0) * resized_inputs - 1.0
 
-    def _extract_proposal_features(self, preprocessed_inputs, scope):
-        """Extracts RPN features.
-        Extracts features using the first half of the NASNet network.
-        We construct the network in `align_feature_maps=True` mode, which means
-        that all VALID paddings in the network are changed to SAME padding so that
-        the feature maps are aligned.
+    def extract_features(self, preprocessed_inputs):
+        """Extracts features from preprocessed inputs.
+        This function is responsible for extracting feature maps from preprocessed
+        images (to be overridden).
         Args:
-          preprocessed_inputs: A [batch, height, width, channels] float32 tensor
+          preprocessed_inputs: a [batch, height, width, channels] float tensor
             representing a batch of images.
-          scope: A scope name.
         Returns:
-          rpn_feature_map: A dictionary with pyramid layers as keys and
-          tensors with shape [batch, height, width, depth] as values
-        Raises:
-          ValueError: If the created network is missing the required activation.
+          feature_maps: a list of tensors where the ith tensor has shape
+            [batch, height_i, width_i, depth_i]
         """
-        del scope
-
         if len(preprocessed_inputs.get_shape().as_list()) != 4:
             raise ValueError('`preprocessed_inputs` must be 4 dimensional, got a '
                              'tensor of shape %s' % preprocessed_inputs.get_shape())
@@ -188,18 +185,20 @@ class RetinaNetNASFeatureExtractor(retinanet_meta_arch.RetinaNetFeatureExtractor
                 _, end_points = build_custom_nasnet(
                     preprocessed_inputs, is_training=self._is_training)
 
-        pyramid_layers = ['Cell_3', 'Cell_7', 'Cell_11']
-        rpn_feature_map = {l: end_points[l] for l in pyramid_layers}
+            pyramid_layers = ['Cell_3', 'Cell_7', 'Cell_11']
+            image_features = [end_points[l] for l in pyramid_layers]
+            feature_maps = feature_map_generators.fpn_top_down_feature_maps(
+                image_features, self._feature_depth, scope='pyramid_features')
 
-        # nasnet.py does not maintain the batch size in the first dimension.
-        # This work around permits us retaining the batch for below.
-        for l in pyramid_layers:
-            batch = preprocessed_inputs.get_shape().as_list()[0]
-            shape_without_batch = rpn_feature_map[l].get_shape().as_list()[1:]
-            rpn_feature_map_shape = [batch] + shape_without_batch
-            rpn_feature_map[l].set_shape(rpn_feature_map_shape)
+        # # nasnet.py does not maintain the batch size in the first dimension.
+        # # This work around permits us retaining the batch for below.
+        # for l in pyramid_layers:
+        #     batch = preprocessed_inputs.get_shape().as_list()[0]
+        #     shape_without_batch = rpn_feature_map[l].get_shape().as_list()[1:]
+        #     rpn_feature_map_shape = [batch] + shape_without_batch
+        #     rpn_feature_map[l].set_shape(rpn_feature_map_shape)
 
-        return rpn_feature_map
+        return feature_maps.values()
 
     def restore_from_classification_checkpoint_fn(self, feature_extractor_scope):
         """Returns a map of variables to load from a foreign checkpoint.
