@@ -93,7 +93,7 @@ def _build_nasnet_base(hidden_previous,
     return net
 
 
-def build_custom_nasnet(images, is_training=True):
+def build_custom_nasnet(images, backbone_scope='nasnet', is_training=True):
     """Build custom NASNet Mobile model"""
     # hparams = nasnet._mobile_imagenet_config()
     # # Calculate the total number of cells in the network
@@ -108,11 +108,11 @@ def build_custom_nasnet(images, is_training=True):
     # reduction_cell = nasnet_utils.NasNetAReductionCell(
     #     hparams.num_conv_filters, hparams.drop_path_keep_prob,
     #     total_num_cells, hparams.total_training_steps)
-
-    net, end_points = nasnet.build_nasnet_mobile(
-        images, num_classes=None,
-        is_training=is_training,
-        final_endpoint='Cell_11')
+    with tf.variable_scope(backbone_scope):
+        net, end_points = nasnet.build_nasnet_mobile(
+            images, num_classes=None,
+            is_training=is_training,
+            final_endpoint='Cell_11')
 
     # hidden_previous = end_points['Cell_6']
     # hidden = end_points['Cell_7']
@@ -185,10 +185,10 @@ class RetinaNetNASFeatureExtractor(retinanet_meta_arch.RetinaNetFeatureExtractor
                 _, end_points = build_custom_nasnet(
                     preprocessed_inputs, is_training=self._is_training)
 
-            pyramid_layers = ['Cell_3', 'Cell_7', 'Cell_11']
-            image_features = [end_points[l] for l in pyramid_layers]
-            feature_maps = feature_map_generators.fpn_top_down_feature_maps(
-                image_features, self._feature_depth, scope='pyramid_features')
+        pyramid_layers = ['Cell_3', 'Cell_7', 'Cell_11']
+        image_features = [end_points[l] for l in pyramid_layers]
+        feature_maps = feature_map_generators.fpn_top_down_feature_maps(
+            image_features, self._feature_depth, scope='pyramid')
 
         # # nasnet.py does not maintain the batch size in the first dimension.
         # # This work around permits us retaining the batch for below.
@@ -200,19 +200,22 @@ class RetinaNetNASFeatureExtractor(retinanet_meta_arch.RetinaNetFeatureExtractor
 
         return feature_maps.values()
 
-    def restore_from_classification_checkpoint_fn(self, feature_extractor_scope):
+    def restore_from_classification_checkpoint_fn(
+            self, feature_extractor_scope, backbone_scope='nasnet'):
         """Returns a map of variables to load from a foreign checkpoint.
         Args:
           feature_extractor_scope: A scope name for the feature extractor.
+          backbone_scope: A scope name for the backbone network.
         Returns:
           A dict mapping variable names (to load from a checkpoint) to variables in
           the model graph.
         """
         variables_to_restore = {}
+        scope_name = feature_extractor_scope + '/' + backbone_scope
         for variable in tf.global_variables():
-            if variable.op.name.startswith(feature_extractor_scope):
+            if variable.op.name.startswith(scope_name):
                 var_name = variable.op.name.replace(
-                    feature_extractor_scope + '/', '')
+                    scope_name + '/', '')
                 var_name += '/ExponentialMovingAverage'
                 variables_to_restore[var_name] = variable
         return variables_to_restore

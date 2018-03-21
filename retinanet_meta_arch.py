@@ -1,9 +1,8 @@
 import tensorflow as tf
 from abc import abstractmethod
-from object_detection.core import model
-from object_detection.utils import shape_utils
 from object_detection.anchor_generators import multiscale_grid_anchor_generator
-from object_detection.core import box_list_ops
+from object_detection.meta_architectures import ssd_meta_arch
+from object_detection.core import losses
 
 slim = tf.contrib.slim
 
@@ -47,6 +46,7 @@ class RetinaNetFeatureExtractor(object):
         Args:
           preprocessed_inputs: a [batch, height, width, channels] float tensor
             representing a batch of images.
+          scope: feature extractor scope
         Returns:
           feature_maps: a list of tensors where the ith tensor has shape
             [batch, height_i, width_i, depth_i]
@@ -61,121 +61,116 @@ class RetinaNetFeatureExtractor(object):
         pass
 
 
-class RetinaNetMetaArch(model.DetectionModel):
+class RetinaNetMetaArch(ssd_meta_arch.SSDMetaArch):
     """Retina net Meta-architecture definition."""
 
     def __init__(self,
                  is_training,
-                 num_classes,
-                 image_resizer_fn,
-                 feature_extractor,
                  anchor_generator,
-                 parallel_iterations=16):
+                 box_predictor,
+                 box_coder,
+                 feature_extractor,
+                 matcher,
+                 region_similarity_calculator,
+                 encode_background_as_zeros,
+                 negative_class_weight,
+                 image_resizer_fn,
+                 non_max_suppression_fn,
+                 score_conversion_fn,
+                 classification_loss,
+                 localization_loss,
+                 classification_loss_weight,
+                 localization_loss_weight,
+                 normalize_loss_by_num_matches,
+                 hard_example_miner,
+                 add_summaries=True,
+                 normalize_loc_loss_by_codesize=False):
         """RetinaNetMetaArch Constructor.
-            Args:
-              is_training: A boolean indicating whether the training version of the
-                computation graph should be constructed.
-              num_classes: Number of classes.  Note that num_classes *does not*
-                include the background category, so if groundtruth labels take values
-                in {0, 1, .., K-1}, num_classes=K (and not K+1, even though the
-                assigned classification targets can range from {0,... K}).
-              image_resizer_fn: A callable for image resizing.  This callable
-                takes a rank-3 image tensor of shape [height, width, channels]
-                (corresponding to a single image), an optional rank-3 instance mask
-                tensor of shape [num_masks, height, width] and returns a resized rank-3
-                image tensor, a resized mask tensor if one was provided in the input. In
-                addition this callable must also return a 1-D tensor of the form
-                [height, width, channels] containing the size of the true image, as the
-                image resizer can perform zero padding. See protos/image_resizer.proto.
-              feature_extractor: A RetinaNetFeatureExtractor object
-              anchor_generator: An anchor_generator.AnchorGenerator object
-                (note that currently we only support
-                multiscale_grid_anchor_generator.MultiscaleGridAnchorGenerator objects)
-              parallel_iterations: (Optional) The number of iterations allowed to run
-                in parallel for calls to tf.map_fn.
+        Args:
+          is_training: A boolean indicating whether the training version of the
+            computation graph should be constructed.
+          anchor_generator: an anchor_generator.AnchorGenerator object.
+          box_predictor: a box_predictor.BoxPredictor object.
+          box_coder: a box_coder.BoxCoder object.
+          feature_extractor: a RetinaNetFeatureExtractor object.
+          matcher: a matcher.Matcher object.
+          region_similarity_calculator: a
+            region_similarity_calculator.RegionSimilarityCalculator object.
+          encode_background_as_zeros: boolean determining whether background
+            targets are to be encoded as an all zeros vector or a one-hot
+            vector (where background is the 0th class).
+          negative_class_weight: Weight for confidence loss of negative anchors.
+          image_resizer_fn: a callable for image resizing.  This callable always
+            takes a rank-3 image tensor (corresponding to a single image) and
+            returns a rank-3 image tensor, possibly with new spatial dimensions and
+            a 1-D tensor of shape [3] indicating shape of true image within
+            the resized image tensor as the resized image tensor could be padded.
+            See builders/image_resizer_builder.py.
+          non_max_suppression_fn: batch_multiclass_non_max_suppression
+            callable that takes `boxes`, `scores` and optional `clip_window`
+            inputs (with all other inputs already set) and returns a dictionary
+            hold tensors with keys: `detection_boxes`, `detection_scores`,
+            `detection_classes` and `num_detections`. See `post_processing.
+            batch_multiclass_non_max_suppression` for the type and shape of these
+            tensors.
+          score_conversion_fn: callable elementwise nonlinearity (that takes tensors
+            as inputs and returns tensors).  This is usually used to convert logits
+            to probabilities.
+          classification_loss: an object_detection.core.losses.Loss object.
+          localization_loss: a object_detection.core.losses.Loss object.
+          classification_loss_weight: float
+          localization_loss_weight: float
+          normalize_loss_by_num_matches: boolean
+          hard_example_miner: a losses.HardExampleMiner object (can be None)
+          add_summaries: boolean (default: True) controlling whether summary ops
+            should be added to tensorflow graph.
+          normalize_loc_loss_by_codesize: whether to normalize localization loss
+            by code size of the box encoder.
 
-            Raises:
-              ValueError: If first_stage_anchor_generator is not of type
-                grid_anchor_generator.GridAnchorGenerator.
+        Raises:
+          ValueError: If feature_extractor is not of type
+            RetinaNetFeatureExtractor.
+          ValueError: If anchor_generator is not of type
+            grid_anchor_generator.GridAnchorGenerator.
+          ValueError: If box_predictor is not of type
+            box_predictor.WeightSharedConvolutionalBoxPredictor
         """
-        super(RetinaNetMetaArch, self).__init__(num_classes=num_classes)
+        super(RetinaNetMetaArch, self).__init__(
+            is_training,
+            anchor_generator,
+            box_predictor,
+            box_coder,
+            feature_extractor,
+            matcher,
+            region_similarity_calculator,
+            encode_background_as_zeros,
+            negative_class_weight,
+            image_resizer_fn,
+            non_max_suppression_fn,
+            score_conversion_fn,
+            classification_loss,
+            localization_loss,
+            classification_loss_weight,
+            localization_loss_weight,
+            normalize_loss_by_num_matches,
+            hard_example_miner,
+            add_summaries=add_summaries,
+            normalize_loc_loss_by_codesize=normalize_loc_loss_by_codesize)
+
+        if not isinstance(feature_extractor, RetinaNetFeatureExtractor):
+            raise ValueError('feature_extractor must be of type '
+                             'RetinaNetFeatureExtractor')
         if not isinstance(anchor_generator,
                           multiscale_grid_anchor_generator.MultiscaleGridAnchorGenerator):
-            raise ValueError('first_stage_anchor_generator must be of type '
+            raise ValueError('anchor_generator must be of type '
                              'multiscale_grid_anchor_generator.MultiscaleGridAnchorGenerator')
-        self._is_training = is_training
-        self._image_resizer_fn = image_resizer_fn
-        # Needed for fine-tuning from classification checkpoints whose
-        # variables do not have the feature extractor scope.
-        self._feature_extractor = feature_extractor
-        self._parallel_iterations = parallel_iterations
-        self._anchor_generator = anchor_generator
-
-    @property
-    def feature_extractor_scope(self):
-        return 'FeatureExtractor'
-
-    def preprocess(self, inputs):
-        """Feature-extractor specific preprocessing.
-        See base class.
-        For Retina net, we perform image resizing in the base class --- each
-        class subclassing RetinaNetMetaArch is responsible for any additional
-        preprocessing (e.g., scaling pixel values to be in [-1, 1]).
-        Args:
-          inputs: a [batch, height_in, width_in, channels] float tensor representing
-            a batch of images with values between 0 and 255.0.
-        Returns:
-          preprocessed_inputs: a [batch, height_out, width_out, channels] float
-            tensor representing a batch of images.
-          true_image_shapes: int32 tensor of shape [batch, 3] where each row is
-            of the form [height, width, channels] indicating the shapes
-            of true images in the resized images, as resized images can be padded
-            with zeros.
-        Raises:
-          ValueError: if inputs tensor does not have type tf.float32
-        """
-        if inputs.dtype is not tf.float32:
-            raise ValueError('`preprocess` expects a tf.float32 tensor')
-        with tf.name_scope('Preprocessor'):
-            outputs = shape_utils.static_or_dynamic_map_fn(
-                self._image_resizer_fn,
-                elems=inputs,
-                dtype=[tf.float32, tf.int32],
-                parallel_iterations=self._parallel_iterations)
-            resized_inputs = outputs[0]
-            true_image_shapes = outputs[1]
-            return (self._feature_extractor.preprocess(resized_inputs),
-                    true_image_shapes)
-
-    def _extract_rpn_feature_maps(self, preprocessed_inputs):
-        """Extracts RPN features.
-        This function extracts two feature maps: a feature map to be directly
-        fed to a box predictor (to predict location and objectness scores for
-        proposals) and a feature map from which to crop regions which will then
-        be sent to the second stage box classifier.
-        Args:
-          preprocessed_inputs: a [batch, height, width, channels] image tensor.
-        Returns:
-          rpn_box_predictor_features: A 4-D float32 tensor with shape
-            [batch, height, width, depth] to be used for predicting proposal boxes
-            and corresponding objectness scores.
-          rpn_features_to_crop: A 4-D float32 tensor with shape
-            [batch, height, width, depth] representing image features to crop using
-            the proposals boxes.
-          anchors: A BoxList representing anchors (for the RPN) in
-            absolute coordinates.
-          image_shape: A 1-D tensor representing the input image shape.
-        """
-        image_shape = tf.shape(preprocessed_inputs)
-        rpn_features = self._feature_extractor.extract_features(
-            preprocessed_inputs, scope=self.feature_extractor_scope)
-        feature_map_shape_list = []
-
-        for layer, feat in rpn_features.items():
-            feature_map_shape = tf.shape(rpn_features[layer])
-            feature_map_shape_list.append((feature_map_shape[1],
-                                           feature_map_shape[2]))
-
-        anchors = self._anchor_generator.generate(feature_map_shape_list)
+        if not isinstance(box_predictor,
+                          box_predictor.WeightSharedConvolutionalBoxPredictor):
+            raise ValueError('box_predictor must be of type  '
+                             'box_predictor.WeightSharedConvolutionalBoxPredictor')
+        if not isinstance(classification_loss,
+                          losses.SigmoidFocalClassificationLoss):
+            raise ValueError('classification_loss must be of type  '
+                             'losses.SigmoidFocalClassificationLoss')
 
 
