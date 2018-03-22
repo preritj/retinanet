@@ -238,7 +238,7 @@ class SSDNasFpnFeatureExtractor(ssd_meta_arch.SSDFeatureExtractor):
 
         with tf.variable_scope(
                 self._nasnet_scope_name, reuse=self._reuse_weights) as scope:
-            with slim.arg_scope(self._nasnet_arg_scope()):
+            with slim.arg_scope(self._nasnet_arg_scope):
                 last_feature_map, image_features = self._nasnet_base_fn(
                     images=preprocessed_inputs,
                     num_classes=None,
@@ -247,6 +247,13 @@ class SSDNasFpnFeatureExtractor(ssd_meta_arch.SSDFeatureExtractor):
 
         # pyramid_layers = ['Cell_3', 'Cell_7', 'Cell_11']
         image_features = self._filter_features(image_features)
+        # batch = preprocessed_inputs.get_shape().as_list()[0]
+        # for key, feature in image_features.items():
+        #     shape_without_batch = feature.get_shape().as_list()[1:]
+        #     rpn_feature_map_shape = [batch] + shape_without_batch
+        #     image_features[key].set_shape(rpn_feature_map_shape)
+        # last_feature_map = image_features[self._nasnet_extract_layers[-1]]
+
         with tf.variable_scope(self._fpn_scope_name, reuse=self._reuse_weights):
             with slim.arg_scope(self._conv_hyperparams):
                 for i in range(self._n_extra_layers):
