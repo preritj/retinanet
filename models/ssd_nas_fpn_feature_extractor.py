@@ -11,8 +11,7 @@ Paper refs:
 
 Code ref:
 [1] https://github.com/tensorflow/models/blob/master/research/slim/nets/nasnet
-[2] https://github.com/tensorflow/models/blob/master/research/object_detection/models/faster_rcnn_nas_feature_extractor.py"""
-
+[2] https://github.com/tensorflow/models/blob/master/research/object_detection/models/ssd_resnet_v1_fpn_feature_extractor.py"""
 
 import tensorflow as tf
 from slim.nets.nasnet import nasnet
@@ -274,18 +273,17 @@ class SSDNasFpnFeatureExtractor(ssd_meta_arch.SSDFeatureExtractor):
 
         return feature_maps.values()
 
-    def restore_from_classification_checkpoint_fn(
-            self, feature_extractor_scope, backbone_scope='nasnet'):
+    def restore_from_classification_checkpoint_fn(self, feature_extractor_scope):
         """Returns a map of variables to load from a foreign checkpoint.
+
         Args:
           feature_extractor_scope: A scope name for the feature extractor.
-          backbone_scope: A scope name for the backbone network.
         Returns:
           A dict mapping variable names (to load from a checkpoint) to variables in
           the model graph.
         """
         variables_to_restore = {}
-        scope_name = feature_extractor_scope + '/' + backbone_scope
+        scope_name = feature_extractor_scope + '/' + self._nasnet_scope_name
         for variable in tf.global_variables():
             if variable.op.name.startswith(scope_name):
                 var_name = variable.op.name.replace(
@@ -324,7 +322,7 @@ class SSDNasMobileFpnFeatureExtractor(SSDNasFpnFeatureExtractor):
             features. Default is False. UNUSED currently.
           use_depthwise: Whether to use depthwise convolutions. UNUSED currently.
         """
-        nasnet_arg_scope=nasnet_mobile_arg_scope_for_detection(batch_norm_trainable)
+        nasnet_arg_scope = nasnet_mobile_arg_scope_for_detection(batch_norm_trainable)
         extract_layers = ['Cell_3', 'Cell_7', 'Cell_11']
         super(SSDNasMobileFpnFeatureExtractor, self).__init__(
             is_training, depth_multiplier, min_depth, pad_to_multiple,
