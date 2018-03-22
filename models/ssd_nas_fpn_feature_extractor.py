@@ -98,6 +98,8 @@ def _build_nasnet_base(hidden_previous,
 def build_custom_nasnet(images, is_training=True):
     """Build custom NASNet Mobile model"""
     # hparams = nasnet._mobile_imagenet_config()
+    # if not self._is_training:
+    #     hparams.set_hparam('drop_path_keep_prob', 1.0)
     # # Calculate the total number of cells in the network
     # # -- Add 2 for the reduction cells.
     # total_num_cells = hparams.num_cells + 2
