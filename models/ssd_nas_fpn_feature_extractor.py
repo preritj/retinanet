@@ -260,9 +260,7 @@ class SSDNasFpnFeatureExtractor(ssd_meta_arch.SSDFeatureExtractor):
                     image_features[layer_name] = last_feature_map
                     pyramid_layers.append(layer_name)
                 feature_maps = feature_map_generators.fpn_top_down_feature_maps(
-                    [
-                        image_features[key] for key in pyramid_layers
-                    ],
+                    [image_features[key] for key in pyramid_layers],
                     depth=256,
                     scope='top_down_features')
 
